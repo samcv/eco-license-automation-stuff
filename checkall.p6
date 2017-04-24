@@ -52,7 +52,13 @@ my @presort = get-noncompliant :license;
 my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
 say @no-licenses.elems;
-exit;
+my @slugs;
+for @no-licenses -> $name {
+    next if $name ~~ Str:D;
+    my $slug = get-slug $name;
+    say $slug and @slugs.push($slug) if has-license $slug;
+
+}
 # Gets which modules have noncompliant fields in the META files
 # uses ecosystem api thing which updates probably every 15 mins
 sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
@@ -61,15 +67,11 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
     if $license {
         for ^$json.elems -> $elem {
             unless $json[$elem]<license>:exists {
-                note 'push';
                 @no-license.push: $json[$elem]<name>;
             }
         }
         say "Modules with no license fields\n";
-        say @no-license.join("\n");
-        #for @no-license.keys {
-        #    say $json{$_};
-        #}
+        say @no-license.join(", ");
     }
     if $fields {
         for ^$json.elems -> $elem {
@@ -87,4 +89,30 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
     }
     return @no-license;
     #say %things.perl;
+}
+sub has-license (Str:D $slug) {
+    my $prefix = "https://raw.githubusercontent.com/$slug/master";
+    my @files = "LICENSE";
+    for @files {
+        return $_ if is-http-ok "$prefix/$_";
+    }
+    Nil;
+}
+sub get-slug (Str:D $modname) {
+    my token not-slash { <[\S]-[/]>+ };
+    my $url = "https://modules.perl6.org/dist/$modname";
+    #note "Finding slug from $modname\n $url";
+    if run('curl', '-Is', $url, :out).out.lines.first(/Location/) ~~ /'Location:' \s* $<url>=(\S+)/ {
+        if $<url> ~~  m/ 'http' [s]? '://github.com/' $<user>=(<not-slash>) '/' $<repo>=(<not-slash>) '/'? /  {
+          return "$<user>/$<repo>";
+          note "Github user $<user> github repo $<repo>";
+        }
+        else {
+          note "Couldn't detect github from $<url>";
+        }
+    }
+    else {
+        note "couldn't find github locatieon";
+    }
+    Nil;
 }
