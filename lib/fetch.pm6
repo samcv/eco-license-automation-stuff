@@ -1,7 +1,8 @@
 sub fetch-url (Str:D $url, Bool :$header-only = False) is export {
     my @args = 'curl';
-    @args.push($header-only ?? '-sI' !! '-s');
-    run(|@args, $url, :out).out.slurp;
+    @args.push($header-only ?? '-Is' !! '-s');
+    my $cmd = run(|@args, $url, :out);
+    return $cmd.out.slurp, $cmd.exitcode;
 }
 
 sub is-http-ok (Str $url) is export {

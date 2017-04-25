@@ -1,9 +1,4 @@
-use lib 'lib';
 use fetch;
-#my %json = get-license-json;
-my $file = "Artistic-2.0.txt".IO.slurp;
-die unless $file;
-say compare-them(normalize-license($file));
 sub get-license-json {
     my (Str:D $json-txt, Int:D $exitcode) = fetch-url 'https://raw.githubusercontent.com/sindresorhus/spdx-license-list/master/spdx-full.json';
     note $exitcode == 0 ?? "Done downloading file" !! "failed downloading file";
