@@ -24,8 +24,8 @@ sub get-bags (%json) {
 }
 sub compare-them ($text2) is export {
     state %json = get-license-json;
-    my @words2 = $text2.words;
-    my %values = get-bags(%json);
+    state %values = get-bags(%json);
+    my @words2 = normalize-license($text2).words;
     my %similarity;
 
     note "Finding similarity";
@@ -35,12 +35,12 @@ sub compare-them ($text2) is export {
     my @sorted = %similarity.sort({$^b.value <=> $^a.value});
     if @sorted[0].value > 0.995 {
         my $is = @sorted[0];
-        say "Project is {$is.key} with {$is.value *100}% certainty";
+        note "Project is {$is.key} with {$is.value *100}% certainty";
         return $is.key;
     }
     else {
-        say "Less than 99.5% certainty. Found these candidates:";
-        say @sorted.head(3);
+        note "Less than 99.5% certainty. Found these candidates:";
+        note @sorted.head(3);
         return False;
     }
 
@@ -52,11 +52,11 @@ sub get-count (%hash1, %hash2, Bool:D :$second-run = False) {
         if  %hash2{$word}:exists {
             next if $second-run;
             my $found = $num - %hash2{$word};
-            say "Found “$word” $found times compared to text2" if $found != 0;
+            note "Found “$word” $found times compared to text2" if $found != 0;
             $count += abs($found);
         }
         else {
-            say "Found “$word” $num times is in text1 but NOT text2";
+            note "Found “$word” $num times is in text1 but NOT text2";
             $count += $num;
         }
     }

@@ -58,9 +58,15 @@ sub MAIN (Bool:D :$distribution = False) {
     for @no-licenses -> $name {
         #next if $name ~~ Str:D;
         my $slug = get-slug $name;
-        say $slug and @slugs.push($slug) if has-license $slug;
+        next unless $slug ~~ Str:D;
+        my $has-license = has-license $slug;
+        if $has-license {
+            say $slug, " $has-license";
+            @slugs.push($slug => $has-license);
+        }
 
     }
+    spurt "license-list.json", to-json(@slugs);
 }
 # Gets which modules have noncompliant fields in the META files
 # uses ecosystem api thing which updates probably every 15 mins
@@ -95,13 +101,29 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
     #say %things.perl;
 }
 sub has-license (Str:D $slug) {
-    #GET /repos/:owner/:repo/contents/:path
-    my $prefix = "https://raw.githubusercontent.com/$slug/master";
-    my @files = "LICENSE";
-    for @files {
-        return $_ if is-http-ok "$prefix/$_";
+    if $slug ~~ /jonathanstowe/ {
+        note "I AM REMOVING ALL MY MODULES IF THIS IS NOT RESOLVED BY 9PM BST";
+        return False;
     }
-    Nil;
+    #GET /repos/:owner/:repo/contents/:path
+    #https://api.github.com/repos/samcv/URL-Find/contents/
+    #my $prefix = "https://raw.githubusercontent.com/$slug/master";
+    my $prefix = "https://api.github.com/repos/$slug/contents/";
+    my ($json, $rtrncode) = fetch-url $prefix, :token;
+    my $json-txt = from-json($json);
+    note "elems: ", $json-txt.elems;
+    my @license-files;
+    for ^$json-txt.elems {
+        if $json-txt[$_]<name> ~~ /:i copying|license|licence/ {
+            @license-files.push($json-txt[$_]<download_url>);
+        }
+    }
+    note @license-files;
+    if @license-files.elems == 1 {
+        my ($txt, $rtrncode) = fetch-url @license-files[0];
+        return compare-them($txt);
+    }
+    return False;
 }
 sub get-slug (Str:D $modname) {
     my token not-slash { <[\S]-[/]>+ };
