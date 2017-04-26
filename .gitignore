@@ -1,1 +1,5 @@
 .precomp/
+old/
+pbof*/
+list2.txt
+pull-based-on-file*.txt

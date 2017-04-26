@@ -1,4 +1,15 @@
 use fetch;
+use OO::Monitors;
+monitor mon-hash {
+    has %.hash;
+    method Bool {
+        %!hash.Bool;
+    }
+}
+state $mon-json = mon-hash.new;
+$mon-json.hash =
+state %json = get-license-json;
+state %values = get-bags(%json);
 sub get-license-json {
     my (Str:D $json-txt, Int:D $exitcode) = fetch-url 'https://raw.githubusercontent.com/sindresorhus/spdx-license-list/master/spdx-full.json';
     note $exitcode == 0 ?? "Done downloading file" !! "failed downloading file";
@@ -23,8 +34,6 @@ sub get-bags (%json) {
     %values;
 }
 sub compare-them ($text2) is export {
-    state %json = get-license-json;
-    state %values = get-bags(%json);
     my @words2 = normalize-license($text2).words;
     my %similarity;
 
@@ -33,7 +42,9 @@ sub compare-them ($text2) is export {
         %similarity{$_} = similarity(%values{$_}, @words2.Bag);
     }
     my @sorted = %similarity.sort({$^b.value <=> $^a.value});
-    if @sorted[0].value > 0.995 {
+    my $diff-words = (1 - @sorted[0].value) * @words2.elems;
+    note "Estimate about $diff-words different";
+    if @sorted[0].value > 0.995 or $diff-words <=4 {
         my $is = @sorted[0];
         note "Project is {$is.key} with {$is.value *100}% certainty";
         return $is.key;

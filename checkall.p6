@@ -2,33 +2,51 @@
 use JSON::Fast;
 use v6.d.PREVIEW;
 use lib 'lib';
+use OO::Monitors;
 use license_check;
 use fetch;
 use ok-meta-fields;
 constant $eco-meta = 'http://ecosystem-api.p6c.org/projects.json';
 # Gets the distribution of tag usage and the usage of license tags
+monitor mon-list {
+    has @.list is rw;
+}
 sub get-distribution {
     my $lock = Lock.new;
-    my @list;
+    my $lock2 = Lock.new;
+    my $m-list = mon-list.new;
     note "getting list";
     my ($list, $lrtrn) = fetch-url 'https://raw.githubusercontent.com/perl6/ecosystem/master/META.list';
     note "got list";
-    await do for $list.lines -> $url {
-       start {
-           my $proc = run 'curl', '-s', $url, :out;
-           my Str $out = $proc.out.slurp;
-           my $result;
-           try {
-               $result = from-json($out);
-           };
-           $lock.protect({
-               @list.append($result.keys);
-           }) if $proc.exitcode == 0 and $result;
-           $*ERR.print: '.';
+    my %json-hash;
+    my @proc-prom;
+    for $list.lines -> $url {
+        my @args = 'curl', '-s', $url;
+        my $proc = Proc::Async.new(|@args, :out);
+        $proc.stdout.tap( -> $out {
+            $lock.protect( {
+                %json-hash{$url} ~= $out;
+             } );
+        });
+        $*ERR.print('.');
+        my $prom = $proc.start;
+        $lock2.protect: { @proc-prom.push($prom) };
+    }
+    loop {
+        if @proc-prom.elems < $list.lines.elems {
+            sleep 0.5;
+        }
+        else {
+            await Promise.allof(@proc-prom);
+            last;
         }
     }
+    for %json-hash.kv -> $key, $value {
+        my $result = try { from-json($value) };
+        $m-list.list.append($result.keys);
+    }
     $*ERR.print: "\n";
-    my $bag = Bag(@list);
+    my $bag = Bag($m-list.list);
     say ($bag<license> / $bag<name>) * 100 ~ '% of all modules have license fields';
     say "{$bag<name>} modules {$bag<license>} have license metadata";
     say $bag.sort(-*.value.Int);
@@ -50,22 +68,34 @@ sub MAIN (Bool:D :$distribution = False) {
         #next if .match(/'http'\S+['pull'|'issue']/);
         @attempted.push: $thing;
     }
+    #my @slugs;
+    #for 'pull-based-on-file.txt'.IO.lines {
+    #    m/^$<slug>=(\S+)/;
+
+
+    #}
     my @presort = get-noncompliant :license;
     my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
-    say @no-licenses.elems;
-    my @slugs;
-    for @no-licenses -> $name {
-        #next if $name ~~ Str:D;
-        my $slug = get-slug $name;
-        next unless $slug ~~ Str:D;
-        my $has-license = has-license $slug;
-        if $has-license {
-            say $slug, " $has-license";
-            @slugs.push($slug => $has-license);
+    note @no-licenses.elems;
+    #my $slugs = mon-list.new;
+    my @slugs = await do for @no-licenses -> $name {
+        start {
+            CATCH { .note }
+            my $slug = get-slug $name;
+            next unless $slug ~~ Str:D;
+            my ($has-license) = has-license $slug;
+            if $has-license {
+                say $slug, " $has-license";
+                $slug => $has-license;
+            }
+            else {
+                Nil;
+            }
         }
 
     }
+    @slugs = @slugs.grep(*.defined);
     spurt "license-list.json", to-json(@slugs);
 }
 # Gets which modules have noncompliant fields in the META files
@@ -80,8 +110,8 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
                 @no-license.push: $json[$elem]<name>;
             }
         }
-        say "Modules with no license fields\n";
-        say @no-license.join(", ");
+        note "Modules with no license fields\n";
+        note @no-license.join(", ");
     }
     if $fields {
         for ^$json.elems -> $elem {
@@ -111,7 +141,6 @@ sub has-license (Str:D $slug) {
     my $prefix = "https://api.github.com/repos/$slug/contents/";
     my ($json, $rtrncode) = fetch-url $prefix, :token;
     my $json-txt = from-json($json);
-    note "elems: ", $json-txt.elems;
     my @license-files;
     for ^$json-txt.elems {
         if $json-txt[$_]<name> ~~ /:i copying|license|licence/ {
