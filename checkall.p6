@@ -78,21 +78,28 @@ sub MAIN (Bool:D :$distribution = False) {
     my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
     note @no-licenses.elems;
+    my @locks = Lock.new xx 2;
     #my $slugs = mon-list.new;
     my @slugs = await do for @no-licenses -> $name {
-        start {
-            CATCH { .note }
-            my $slug = get-slug $name;
-            next unless $slug ~~ Str:D;
-            my ($has-license) = has-license $slug;
-            if $has-license {
-                say $slug, " $has-license";
-                $slug => $has-license;
+        @locks.pick.protect({
+            await start {
+                CATCH { .note }
+                my $slug = get-slug $name;
+                if $slug ~~ Str:D {
+                    my ($has-license) = has-license $slug;
+                    if $has-license {
+                        say $slug, " $has-license";
+                        $slug => $has-license;
+                    }
+                    else {
+                        Nil;
+                    }
+                }
+                else {
+                    Nil;
+                }
             }
-            else {
-                Nil;
-            }
-        }
+        });
 
     }
     @slugs = @slugs.grep(*.defined);
