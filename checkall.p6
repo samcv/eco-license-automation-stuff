@@ -78,31 +78,37 @@ sub MAIN (Bool:D :$distribution = False) {
     my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
     note @no-licenses.elems;
-    my @locks = Lock.new xx 2;
+    my @locks = Lock.new xx 9;
+    my $unlocks = Channel.new;
+    $unlocks.send($_) for @locks;
     #my $slugs = mon-list.new;
-    my @slugs = await do for @no-licenses -> $name {
-        @locks.pick.protect({
-            await start {
-                CATCH { .note }
-                my $slug = get-slug $name;
-                if $slug ~~ Str:D {
-                    my ($has-license) = has-license $slug;
-                    if $has-license {
-                        say $slug, " $has-license";
-                        $slug => $has-license;
+    my $lock = Lock.new;
+    my $slug-lock = Lock.new;
+    my @slugs;
+    react {
+        whenever $unlocks -> $unlock {
+            push @slugs, start {
+                $unlock.protect({
+                    CATCH { .note }
+                    my $return = Nil;
+                    my $name = $lock.protect({@no-licenses.pop});
+                    my $slug = get-slug $name;
+                    if $slug ~~ Str:D {
+                        my ($has-license) = has-license $slug;
+                        if $has-license {
+                            say $slug, " $has-license";
+                            $return = $slug => $has-license;
+                        }
                     }
-                    else {
-                        Nil;
-                    }
-                }
-                else {
-                    Nil;
-                }
+                    $unlocks.send($unlock);
+                    $return;
+                });
             }
-        });
+
+        }
 
     }
-    @slugs = @slugs.grep(*.defined);
+    @slugs = @slugs».result.grep(*.defined);
     spurt "license-list.json", to-json(@slugs);
 }
 # Gets which modules have noncompliant fields in the META files
