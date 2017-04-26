@@ -15,17 +15,14 @@ sub get-distribution {
     note "got list";
     await do for $list.lines -> $url {
        start {
-           #say $url;
            my $proc = run 'curl', '-s', $url, :out;
            my Str $out = $proc.out.slurp;
            my $result;
            try {
                $result = from-json($out);
            };
-           #say $result;
            $lock.protect({
                @list.append($result.keys);
-               #say @list;
            }) if $proc.exitcode == 0 and $result;
            $*ERR.print: '.';
         }
@@ -37,7 +34,10 @@ sub get-distribution {
     say $bag.sort(-*.value.Int);
 }
 sub MAIN (Bool:D :$distribution = False) {
-    get-distribution if $distribution;
+    if $distribution {
+        get-distribution;
+        exit;
+    }
     my $fixed = True;
     my $attempt = True;
     my @attempted;
