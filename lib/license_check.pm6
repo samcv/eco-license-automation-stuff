@@ -1,13 +1,4 @@
 use fetch;
-use OO::Monitors;
-monitor mon-hash {
-    has %.hash;
-    method Bool {
-        %!hash.Bool;
-    }
-}
-state $mon-json = mon-hash.new;
-$mon-json.hash =
 state %json = get-license-json;
 state %values = get-bags(%json);
 sub get-license-json {
