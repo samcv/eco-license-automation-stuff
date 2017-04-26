@@ -132,7 +132,7 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
 }
 sub has-license (Str:D $slug) {
     if $slug ~~ /jonathanstowe/ {
-        note "I AM REMOVING ALL MY MODULES IF THIS IS NOT RESOLVED BY 9PM BST";
+        note "Skipping $slug due to exception";
         return False;
     }
     #GET /repos/:owner/:repo/contents/:path
