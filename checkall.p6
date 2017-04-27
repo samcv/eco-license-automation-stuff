@@ -9,7 +9,22 @@ use ok-meta-fields;
 constant $eco-meta = 'http://ecosystem-api.p6c.org/projects.json';
 # Gets the distribution of tag usage and the usage of license tags
 monitor mon-list {
-    has @.list is rw;
+    has @!list;
+    method push ($item) {
+        @!list.push: $item;
+    }
+    method pop {
+        @!list.pop;
+    }
+    method set (@thing) {
+        @!list = @thing;
+    }
+    method get {
+        @!list;
+    }
+    method append (@*things) {
+        @!list.push: $_ for @*things;
+    }
 }
 sub get-distribution {
     my $lock = Lock.new;
@@ -46,7 +61,7 @@ sub get-distribution {
         $m-list.list.append($result.keys);
     }
     $*ERR.print: "\n";
-    my $bag = Bag($m-list.list);
+    my $bag = Bag($m-list.get);
     say ($bag<license> / $bag<name>) * 100 ~ '% of all modules have license fields';
     say "{$bag<name>} modules {$bag<license>} have license metadata";
     say $bag.sort(-*.value.Int);
@@ -81,17 +96,16 @@ sub MAIN (Bool:D :$distribution = False) {
     my @locks = Lock.new xx 9;
     my $unlocks = Channel.new;
     $unlocks.send($_) for @locks;
-    #my $slugs = mon-list.new;
-    my $lock = Lock.new;
-    my $slug-lock = Lock.new;
-    my @slugs;
+    my $slugs = mon-list.new;
+    my $no-licenses = mon-list.new;
+    $no-licenses.set: @no-licenses;
     react {
         whenever $unlocks -> $unlock {
-            push @slugs, start {
-                $unlock.protect({
+            $unlock.protect({
+                $slugs.push: start {
                     CATCH { .note }
                     my $return = Nil;
-                    my $name = $lock.protect({@no-licenses.pop});
+                    my $name = $no-licenses.pop;
                     my $slug = get-slug $name;
                     if $slug ~~ Str:D {
                         my ($has-license) = has-license $slug;
@@ -102,13 +116,13 @@ sub MAIN (Bool:D :$distribution = False) {
                     }
                     $unlocks.send($unlock);
                     $return;
-                });
-            }
+                };
+            });
 
         }
 
     }
-    @slugs = @slugs».result.grep(*.defined);
+    my @slugs = $slugs.get».result.grep(*.defined);
     spurt "license-list.json", to-json(@slugs);
 }
 # Gets which modules have noncompliant fields in the META files

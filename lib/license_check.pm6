@@ -1,6 +1,13 @@
 use fetch;
-state %json = get-license-json;
-state %values = get-bags(%json);
+use OO::Monitors;
+monitor mon-hash {
+    has %!hash;
+    method get { %!hash };
+    method set (%new-hash) { %!hash = %new-hash }
+}
+#state %json = get-license-json;
+my $values = mon-hash.new;
+$values.set:  get-bags(get-license-json);
 sub get-license-json {
     my (Str:D $json-txt, Int:D $exitcode) = fetch-url 'https://raw.githubusercontent.com/sindresorhus/spdx-license-list/master/spdx-full.json';
     note $exitcode == 0 ?? "Done downloading file" !! "failed downloading file";
@@ -27,7 +34,7 @@ sub get-bags (%json) {
 sub compare-them ($text2) is export {
     my @words2 = normalize-license($text2).words;
     my %similarity;
-
+    my %values = $values.get;
     note "Finding similarity";
     for %values.keys {
         %similarity{$_} = similarity(%values{$_}, @words2.Bag);
