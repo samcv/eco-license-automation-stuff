@@ -1,13 +1,17 @@
 use fetch;
 use OO::Monitors;
+state $values-mon;
 monitor mon-hash {
     has %!hash;
     method get { %!hash };
     method set (%new-hash) { %!hash = %new-hash }
 }
-#state %json = get-license-json;
-my $values = mon-hash.new;
-$values.set:  get-bags(get-license-json);
+sub init-mon {
+    unless $values-mon {
+        $values-mon = mon-hash.new;
+        $values-mon.set:  get-bags(get-license-json);
+    }
+}
 sub get-license-json {
     my (Str:D $json-txt, Int:D $exitcode) = fetch-url 'https://raw.githubusercontent.com/sindresorhus/spdx-license-list/master/spdx-full.json';
     note $exitcode == 0 ?? "Done downloading file" !! "failed downloading file";
@@ -31,13 +35,16 @@ sub get-bags (%json) {
     }
     %values;
 }
+
 sub compare-them ($text2) is export {
+    INIT init-mon;
     my @words2 = normalize-license($text2).words;
     my %similarity;
-    my %values = $values.get;
+    my %values = $values-mon.get;
+    my $words2-bag = @words2.Bag;
     note "Finding similarity";
     for %values.keys {
-        %similarity{$_} = similarity(%values{$_}, @words2.Bag);
+        %similarity{$_} = similarity(%values{$_}, $words2-bag);
     }
     my @sorted = %similarity.sort({$^b.value <=> $^a.value});
     my $diff-words = (1 - @sorted[0].value) * @words2.elems;

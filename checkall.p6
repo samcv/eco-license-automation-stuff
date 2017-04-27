@@ -14,16 +14,27 @@ monitor mon-list {
         @!list.push: $item;
     }
     method pop {
-        @!list.pop;
+        if @!list.elems {
+            @!list.pop;
+        }
+        else {
+            warn "Tried to pop an empty array";
+        }
     }
     method set (@thing) {
         @!list = @thing;
     }
     method get {
-        @!list;
+        return @!list;
     }
     method append (@*things) {
         @!list.push: $_ for @*things;
+    }
+    method Bool {
+        return @!list.Bool;
+    }
+    method elems {
+        return @!list.elems;
     }
 }
 sub get-distribution {
@@ -83,12 +94,12 @@ sub MAIN (Bool:D :$distribution = False) {
         #next if .match(/'http'\S+['pull'|'issue']/);
         @attempted.push: $thing;
     }
-    #my @slugs;
-    #for 'pull-based-on-file.txt'.IO.lines {
-    #    m/^$<slug>=(\S+)/;
-
-
-    #}
+    my @attempted-slugs;
+    for 'pull-based-on-file.txt'.IO.lines -> $line {
+        if $line ~~ /^$<slug>=(\S+)/ {
+            @attempted-slugs.push: ~$<slug>;
+        }
+    }
     my @presort = get-noncompliant :license;
     my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
@@ -96,34 +107,48 @@ sub MAIN (Bool:D :$distribution = False) {
     my @locks = Lock.new xx 9;
     my $unlocks = Channel.new;
     $unlocks.send($_) for @locks;
-    my $slugs = mon-list.new;
-    my $no-licenses = mon-list.new;
-    $no-licenses.set: @no-licenses;
+    my $slugs-mon = mon-list.new;
+    my $no-licenses-mon = mon-list.new;
+    $no-licenses-mon.set: @no-licenses.head(50);
+    my $orig-elems = $no-licenses-mon.elems;
+    my $results-mon = mon-list.new;
+    my $supp = Supply.interval(1);
+    sleep 5;
+    $supp.tap({say $results-mon.elems ~ 'results elems, ' ~ $no-licenses-mon.elems ~ 'no-licenses elems and ' ~ $slugs-mon.elems});
     react {
         whenever $unlocks -> $unlock {
             $unlock.protect({
-                $slugs.push: start {
-                    CATCH { .note }
+                $slugs-mon.push: start {
                     my $return = Nil;
-                    my $name = $no-licenses.pop;
+                    my $name = $no-licenses-mon.pop or do {
+                        if $no-licenses-mon.elems < 1 {
+                            note 'exitingggg';
+                            await Promise.allof($slugs-mon.get);
+                            #sleep 10;
+                            $unlocks.close unless $unlocks.closed;
+                            done();
+                        }
+                    };
                     my $slug = get-slug $name;
                     if $slug ~~ Str:D {
+                        next if $slug eq any(@attempted-slugs);
                         my ($has-license) = has-license $slug;
                         if $has-license {
                             say $slug, " $has-license";
                             $return = $slug => $has-license;
+                            $results-mon.push: $return;
                         }
                     }
-                    $unlocks.send($unlock);
-                    $return;
+                    $unlocks.send($unlock); #if $no-licenses-mon;
                 };
             });
 
         }
 
     }
-    my @slugs = $slugs.get».result.grep(*.defined);
-    spurt "license-list.json", to-json(@slugs);
+    say "END channel";
+    #my @slugs = $slugs-mon.get».result.grep(*.defined);
+    #spurt "license-list.json", to-json(@slugs);
 }
 # Gets which modules have noncompliant fields in the META files
 # uses ecosystem api thing which updates probably every 15 mins
