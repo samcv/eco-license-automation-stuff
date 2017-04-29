@@ -10,31 +10,16 @@ constant $eco-meta = 'http://ecosystem-api.p6c.org/projects.json';
 # Gets the distribution of tag usage and the usage of license tags
 monitor mon-list {
     has @!list;
-    method push ($item) {
-        @!list.push: $item;
-    }
     method pop {
-        if @!list.elems {
-            @!list.pop;
-        }
-        else {
-            warn "Tried to pop an empty array";
-        }
+        @!list.elems ?? @!list.pop !! warn "Tried to pop an empty array";
     }
-    method set (@thing) {
-        @!list = @thing;
-    }
-    method get {
-        return @!list;
-    }
+    method push (\item) { @!list.push: item }
+    method set (@thing) { @!list = @thing }
+    method get   { @!list }
+    method Bool  { @!list.Bool }
+    method elems { @!list.elems }
     method append (@*things) {
         @!list.push: $_ for @*things;
-    }
-    method Bool {
-        return @!list.Bool;
-    }
-    method elems {
-        return @!list.elems;
     }
 }
 sub get-distribution {
@@ -69,7 +54,7 @@ sub get-distribution {
     }
     for %json-hash.kv -> $key, $value {
         my $result = try { from-json($value) };
-        $m-list.list.append($result.keys);
+        $m-list.append($result.keys);
     }
     $*ERR.print: "\n";
     my $bag = Bag($m-list.get);
@@ -77,13 +62,11 @@ sub get-distribution {
     say "{$bag<name>} modules {$bag<license>} have license metadata";
     say $bag.sort(-*.value.Int);
 }
-sub MAIN (Bool:D :$distribution = False) {
+sub MAIN (Bool:D :$distribution = False, Bool:D :$human-decisions = False) {
     if $distribution {
         get-distribution;
         exit;
     }
-    my $fixed = True;
-    my $attempt = True;
     my @attempted;
     for 'modechecklist.md'.IO.lines {
         my $check = ' ';
@@ -96,6 +79,7 @@ sub MAIN (Bool:D :$distribution = False) {
     }
     my @attempted-slugs;
     for 'pull-based-on-file.txt'.IO.lines -> $line {
+        next if $line.starts-with('#');
         if $line ~~ /^$<slug>=(\S+)/ {
             @attempted-slugs.push: ~$<slug>;
         }
@@ -104,47 +88,59 @@ sub MAIN (Bool:D :$distribution = False) {
     my @no-licenses = @presort.grep({ $_ ne any(@attempted)} );
 
     note @no-licenses.elems;
-    my @locks = Lock.new xx 9;
+    my @locks = Lock.new xx 8;
+    my $loc-no = @locks.elems;
     my $unlocks = Channel.new;
     $unlocks.send($_) for @locks;
     my $slugs-mon = mon-list.new;
     my $no-licenses-mon = mon-list.new;
-    $no-licenses-mon.set: @no-licenses.head(50);
+    $no-licenses-mon.set: @no-licenses;
     my $orig-elems = $no-licenses-mon.elems;
     my $results-mon = mon-list.new;
-    my $supp = Supply.interval(1);
-    sleep 5;
-    $supp.tap({say $results-mon.elems ~ 'results elems, ' ~ $no-licenses-mon.elems ~ 'no-licenses elems and ' ~ $slugs-mon.elems});
-    react {
-        whenever $unlocks -> $unlock {
-            $unlock.protect({
-                $slugs-mon.push: start {
-                    my $return = Nil;
-                    my $name = $no-licenses-mon.pop or do {
-                        if $no-licenses-mon.elems < 1 {
-                            note 'exitingggg';
-                            await Promise.allof($slugs-mon.get);
-                            #sleep 10;
-                            $unlocks.close unless $unlocks.closed;
-                            done();
-                        }
-                    };
-                    my $slug = get-slug $name;
-                    if $slug ~~ Str:D {
-                        next if $slug eq any(@attempted-slugs);
-                        my ($has-license) = has-license $slug;
-                        if $has-license {
-                            say $slug, " $has-license";
-                            $return = $slug => $has-license;
-                            $results-mon.push: $return;
-                        }
-                    }
-                    $unlocks.send($unlock); #if $no-licenses-mon;
-                };
-            });
-
+    note "Total projects to search: $orig-elems";
+    sub core (Lock $unlock?) {
+        #note 'in start';
+        my $return = Nil;
+        my $name = $no-licenses-mon.pop or do {
+            if $no-licenses-mon.elems < 1 {
+                #note 'exitingggg';
+                if $loc-no != 1 {
+                    await Promise.allof($slugs-mon.get);
+                    $unlocks.close unless $unlocks.closed;
+                    done();
+                }
+            }
+        };
+        my $slug = get-slug $name;
+        #note "got slug $slug for name $name";
+        if $slug ~~ Str:D and $slug ne @attempted-slugs.any {
+            #note "checking license";
+            my ($has-license) = has-license $slug, $human-decisions;
+            if $has-license {
+                say $slug, " $has-license";
+                $return = $slug => $has-license;
+                $results-mon.push: $return;
+            }
         }
+        $unlocks.send($unlock) if $loc-no != 1;
+    }
+    # this part doesn't work
+    if $loc-no == 1 {
+        while $no-licenses-mon {
+            core Lock;
+        }
+    }
+    else {
+        react {
+            whenever $unlocks -> $unlock {
+                $unlock.protect({
+                    $slugs-mon.push: start {
+                        core $unlock;
+                    };
+                });
 
+            }
+        }
     }
     say "END channel";
     #my @slugs = $slugs-mon.get».result.grep(*.defined);
@@ -182,10 +178,10 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
     return @no-license;
     #say %things.perl;
 }
-sub has-license (Str:D $slug) {
+sub has-license (Str:D $slug, Bool $human-decisions?) {
     if $slug ~~ /jonathanstowe/ {
         note "Skipping $slug due to exception";
-        return False;
+        return Nil;
     }
     #GET /repos/:owner/:repo/contents/:path
     #https://api.github.com/repos/samcv/URL-Find/contents/
@@ -199,12 +195,22 @@ sub has-license (Str:D $slug) {
             @license-files.push($json-txt[$_]<download_url>);
         }
     }
-    note @license-files;
+    #note @license-files;
     if @license-files.elems == 1 {
         my ($txt, $rtrncode) = fetch-url @license-files[0];
-        return compare-them($txt);
+        my ($bool, $result) = compare-them($txt);
+        if $bool {
+            return $result;
+        }
+        elsif $human-decisions {
+            return "@license-files[0] $result.gist()";
+        }
+        else {
+            note   @license-files[0], ' ', $result.gist;
+        }
+
     }
-    return False;
+    return Nil;
 }
 sub get-slug (Str:D $modname) {
     my token not-slash { <[\S]-[/]>+ };

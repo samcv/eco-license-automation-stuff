@@ -1,5 +1,6 @@
 use fetch;
 use OO::Monitors;
+use JSON::Fast;
 state $values-mon;
 monitor mon-hash {
     has %!hash;
@@ -15,24 +16,37 @@ sub init-mon {
 sub get-license-json {
     my (Str:D $json-txt, Int:D $exitcode) = fetch-url 'https://raw.githubusercontent.com/sindresorhus/spdx-license-list/master/spdx-full.json';
     note $exitcode == 0 ?? "Done downloading file" !! "failed downloading file";
-    use JSON::Fast;
     from-json($json-txt);
 }
-sub normalize-license (Str $text) {
+sub normalize-license (Str:D $text) {
     $text.lc;
 }
 
 sub s(Bag:D \x) { x.values.sum };
 sub similarity(Bag:D \a, Bag:D \b) {2 * s(a ∩ b) / (s(a) + s(b)) };
 sub get-bags (%json) {
-    my %values;
     note "Creating Bag's";
-    for %json.keys {
-        die "No licenseText found for $_" unless %json{$_}<licenseText>;
-        my $bag = normalize-license(%json{$_}<licenseText>).words.Bag;
-        die unless $bag ~~ Bag;
-        %values{$_} = $bag;
+    my @proms;
+    await do for %json.keys.rotor(3, :partial) -> $keys {
+        @proms.push: start {
+          my @list;
+          for $keys.list {
+            die "file didn't download properly?" unless %json{$_}<licenseText>;
+           @list.append: $_, normalize-license(%json{$_}<licenseText>).words.Bag;
+         }
+         @list;
+      }
     }
+    my @new;
+    for @proms -> $prom {
+      @new.push: $_ for $prom.result;
+    }
+  #  my $thing = $proms».result;
+    #say $thing.elems;
+    #say $thing.hash.keys;
+    my %values = @new.hash;
+    #say %values.keys;
+  #  die unless %values.elems;
     %values;
 }
 
@@ -52,12 +66,11 @@ sub compare-them ($text2) is export {
     if @sorted[0].value > 0.995 or $diff-words <=4 {
         my $is = @sorted[0];
         note "Project is {$is.key} with {$is.value *100}% certainty";
-        return $is.key;
+        return True, $is.key;
     }
     else {
-        note "Less than 99.5% certainty. Found these candidates:";
-        note @sorted.head(3);
-        return False;
+        note "Less than 99.5% certainty. Found these candidates: ", @sorted.head(3);
+        return (False, @sorted.head(3));
     }
 
 }
