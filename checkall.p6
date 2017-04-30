@@ -3,7 +3,7 @@ use JSON::Fast;
 use v6.d.PREVIEW;
 use lib 'lib';
 use OO::Monitors;
-use license_check;
+use ProcAsyncBatch;
 use fetch;
 use ok-meta-fields;
 constant $eco-meta = 'http://ecosystem-api.p6c.org/projects.json';
@@ -22,39 +22,27 @@ monitor mon-list {
         @!list.push: $_ for @*things;
     }
 }
-monitor Mon-hash {
-    has %!hash;
-    method add-to-key (Str:D $key, Str:D $to-add) { %!hash{$key} ~= $to-add }
-    method get { %!hash }
-}
-
 sub get-distribution {
-    my $lock = Lock.new;
-    my $lock2 = Lock.new;
-    my $m-list = mon-list.new;
     note "getting list";
     my ($list, $lrtrn) = fetch-url 'https://raw.githubusercontent.com/perl6/ecosystem/master/META.list';
     note "got list";
     my %json-hash;
     my @proc-prom;
-    my $json-hash = Mon-hash.new;
+    my @args;
     for $list.lines -> $url {
-        my @args = 'curl', '-s', $url;
-        my $proc = Proc::Async.new(|@args, :out);
-        $proc.stdout.tap( -> $out {
-            $json-hash.add-to-key($url, $out);
-        });
-        $*ERR.print('.');
-        my $prom = $proc.start;
-        @proc-prom.push($prom);
+        @args.push: $url => ('curl', '-s', $url);
     }
-    await Promise.allof(@proc-prom);
-    for $json-hash.get.kv -> $key, $value {
-        my $result = try { from-json($value) };
-        $m-list.append($result.keys);
+    my @key-list;
+    my $t1 = now;
+    my @results = run-and-return-all(@args);
+    my $t2 = now;
+    say $t2 - $t1;
+    for @results -> $pair {
+        my $result = from-json($pair.value);
+        @key-list.append($result.keys);
     }
-    $*ERR.print: "\n";
-    my $bag = Bag($m-list.get);
+    die unless @key-list;
+    my $bag = Bag(@key-list);
     say ($bag<license> / $bag<name>) * 100 ~ '% of all modules have license fields';
     say "{$bag<name>} modules {$bag<license>} have license metadata";
     say $bag.sort(-*.value.Int);
@@ -176,6 +164,7 @@ sub get-noncompliant (Bool:D :$fields = False, Bool:D :$license = False) {
     #say %things.perl;
 }
 sub has-license (Str:D $slug, Bool $human-decisions?) {
+    require license_check <&compare-them>;
     if $slug ~~ /jonathanstowe/ {
         note "Skipping $slug due to exception";
         return Nil;
