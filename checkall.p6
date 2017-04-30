@@ -22,6 +22,12 @@ monitor mon-list {
         @!list.push: $_ for @*things;
     }
 }
+monitor Mon-hash {
+    has %!hash;
+    method add-to-key (Str:D $key, Str:D $to-add) { %!hash{$key} ~= $to-add }
+    method get { %!hash }
+}
+
 sub get-distribution {
     my $lock = Lock.new;
     my $lock2 = Lock.new;
@@ -31,28 +37,19 @@ sub get-distribution {
     note "got list";
     my %json-hash;
     my @proc-prom;
+    my $json-hash = Mon-hash.new;
     for $list.lines -> $url {
         my @args = 'curl', '-s', $url;
         my $proc = Proc::Async.new(|@args, :out);
         $proc.stdout.tap( -> $out {
-            $lock.protect( {
-                %json-hash{$url} ~= $out;
-             } );
+            $json-hash.add-to-key($url, $out);
         });
         $*ERR.print('.');
         my $prom = $proc.start;
-        $lock2.protect: { @proc-prom.push($prom) };
+        @proc-prom.push($prom);
     }
-    loop {
-        if @proc-prom.elems < $list.lines.elems {
-            sleep 0.5;
-        }
-        else {
-            await Promise.allof(@proc-prom);
-            last;
-        }
-    }
-    for %json-hash.kv -> $key, $value {
+    await Promise.allof(@proc-prom);
+    for $json-hash.get.kv -> $key, $value {
         my $result = try { from-json($value) };
         $m-list.append($result.keys);
     }
